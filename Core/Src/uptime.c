@@ -1,7 +1,7 @@
 #include "uptime.h"
 
 // timebase section
-// there's a timer that ticks at 1 khz and calls stepper_int
+// there's a timer that ticks at 1 khz and calls stepper_int()
 // that timer also has a counter that counts up microseconds since the last tick
 // by counting ticks and adding microseconds, we can get exact microseconds since beginning at any point
 
@@ -17,6 +17,7 @@ unsigned long uptime() {
 	unsigned int cnt;
 	unsigned long uptime_us_local;
 
+	// this loop is to catch a race condition where cnt rolls around to zero after reading uptime_us but before reading cnt
 	do {
 		uptime_us_local = uptime_us;
 		cnt = htim->Instance->CNT;

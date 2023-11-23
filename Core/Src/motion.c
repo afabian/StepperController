@@ -2,25 +2,55 @@
 #include "uptime.h"
 #include <math.h>
 
+// default values for velocity limit, acceleration limit, and steps per revolution.
+// these can be overridden by commands when running.
 float vl = 90;
 float al = 10;
 int steps_per_rev = 25000;
 
+// initial and target (final) positions, velocities, and times
 double pf = 0;
 double vf = 0;
-bool target_p_mode = true;
 unsigned long t0 = 0;
 double v0 = 0;
 double p0 = 0;
 
+// if we're current in position target mode (if not then we're in velocity target mode)
+bool target_p_mode = true;
+
+// special mode where we decel to a stop before switching to position mode.
+// this is necessary because our position mode math can't handle cases where v0 isn't zero.
+bool stop_needed = false;
+
+// if the motor is enabled or not.  this should match the default in the main loop.
 bool enabled = true;
 
-float last_v = 0;
-float last_p = 0;
+// the commanded values for p and v that we will calculate
+float v_cmd = 0;
+float p_cmd = 0;
 
 int sign(double value) {
 	return value > 0 ? 1 : -1;
 }
+
+// this accepts commands from command_parser / command_runner.  commands are two letters and a number,
+// so those get decoded into actual function calls here.
+//
+// supported commands:
+//
+// en=0 - disable motor power
+// en=1 - enable motor power
+// mv=X - set max velocity to X
+// ma=X - set max acceleration to X
+// sr=X - set the steps-per-revolution* value to X
+// tp=X - command a target position of X
+// tv=X - command a target velocity of X
+//
+// * steps-per-revolution is the number of steps required to rotate the final device (after any gearing)
+//   by one revolution.  This can be the product of three things:
+//   stepper motor's steps-per-revolution, which is typically 200
+//   stepper driver's microstepping setting
+//   any mechanical advantage obtained through gearing or belts
 
 void motion_command(motionCommand* command) {
 
@@ -50,8 +80,9 @@ void motion_command(motionCommand* command) {
 		vf = 0;
 		target_p_mode = true;
 		t0 = uptime();
-		p0 = last_p;
-		v0 = last_v;
+		p0 = p_cmd;
+		v0 = v_cmd;
+		stop_needed = true;
 	}
 
 	// Velocity Command (deg/sec)
@@ -60,11 +91,16 @@ void motion_command(motionCommand* command) {
 		pf = 0;
 		target_p_mode = false;
 		t0 = uptime();
-		p0 = last_p;
-		v0 = last_v;
+		p0 = p_cmd;
+		v0 = v_cmd;
+		stop_needed = false;
 	}
 
 }
+
+// main motion control command
+// this outputs a target step position for the current moment in time.
+// its up to the parent code to issue steps to the motor to get it to this position.
 
 int motion_get_position_target_steps() {
 
@@ -78,29 +114,51 @@ int motion_get_position_target_steps() {
 
 }
 
+// velocity mode
+
 int motion_get_position_target_steps_velocity_mode() {
-	// this mode is subdivided into two phases: either accelerating to the target velocity, or holding steady at the target velocity
-	unsigned long now = uptime();
-	unsigned long tc = fabs((vf - v0) * 1000000) / al;
-	float a = sign(vf - v0) * al;
-	float t = (now - t0) / 1000000.0f;
-	if (now > t0 + tc) {
-		float tcus = tc / 1000000.0f;
-		float dt = (now - tc - t0) / 1000000.0f;
-		last_v = vf;
-		last_p = p0 + v0 * tcus + 0.5 * a * tcus * tcus + vf * dt;
+
+	// set our velocity target - either the commanded velocity target if we're in that mode,
+	// or zero if we're in position mode but need to do a stop first
+	float v_tgt;
+	if (stop_needed) {
+		v_tgt = 0;
+		if (v_cmd == 0) {
+			stop_needed = false;
+		}
 	}
 	else {
-		last_v = v0 + a * t;
-		last_p = p0 + v0 * t + 0.5 * a * t * t;
+		v_tgt = vf;
 	}
 
-	return last_p / 360.0f * steps_per_rev;
+	unsigned long now = uptime();
+	unsigned long tc = fabs((v_tgt - v0) * 1000000) / al;
+	float a = sign(vf - v0) * al;
+	float t = (now - t0) / 1000000.0f;
+
+	if (now > t0 + tc) /* holding at target velocity */ {
+		float tcus = tc / 1000000.0f;
+		float dt = (now - tc - t0) / 1000000.0f;
+		v_cmd = v_tgt;
+		p_cmd = p0 + v0 * tcus + 0.5 * a * tcus * tcus + v_tgt * dt;
+	}
+
+	else /* accelerating to target velocity */ {
+		v_cmd = v0 + a * t;
+		p_cmd = p0 + v0 * t + 0.5 * a * t * t;
+	}
+
+	// translation the target position from degrees to steps
+	return p_cmd / 360.0f * steps_per_rev;
 }
+
+// position mode
 
 int motion_get_position_target_steps_position_mode() {
 
 	// this assumes that v0 and vf are both zero!
+	// an improved version could be made with support for arbitrary initial (and final?!) velocities.
+	// this would let us switch from velocity mode to position mode without stopping first.
 
 	unsigned long now = uptime();
 
@@ -111,6 +169,8 @@ int motion_get_position_target_steps_position_mode() {
 	float p01 = 0.5f * a * t01 * t01;
 	float p12 = pf - p0 - 2 * p01;
 
+	// special case for if we're doing small movements that will never reach max velocity and have
+	// just accel and decel phases
 	if (fabs(p01) > 0.5f * fabs(pf - p0)) {
 		p01 = 0.5f * (pf - p0);
 		p12 = 0;
@@ -127,27 +187,28 @@ int motion_get_position_target_steps_position_mode() {
 
 	float t = 0;
 
-	if (now > t3) {
-		last_v = 0;
-		last_p = pf;
+	if (now > t3) /* done; resting at target position */ {
+		v_cmd = 0;
+		p_cmd = pf;
 	}
-	else if (now > t2) {
+	else if (now > t2) /* deceleration phase */ {
 		t = (now - t2) * 0.000001f;
-		last_v = v1 - a * t;
-		last_p = p0 + p01 + p12 + v1 * t - 0.5 * a * t * t;
+		v_cmd = v1 - a * t;
+		p_cmd = p0 + p01 + p12 + v1 * t - 0.5 * a * t * t;
 	}
-	else if (now > t1) {
+	else if (now > t1) /* constant-velocity phase */ {
 		t = (now - t1) * 0.000001f;
-		last_v = v;
-		last_p = p0 + p01 + v * t;
+		v_cmd = v;
+		p_cmd = p0 + p01 + v * t;
 	}
-	else {
+	else /* acceleration phase */ {
 		t = (now - t0) * 0.000001f;
-		last_v = a * t;
-		last_p = p0 + 0.5f * a * t * t;
+		v_cmd = a * t;
+		p_cmd = p0 + 0.5f * a * t * t;
 	}
 
-	return last_p / 360.0f * steps_per_rev;
+	// translation the target position from degrees to steps
+	return p_cmd / 360.0f * steps_per_rev;
 }
 
 bool motion_get_enabled() {

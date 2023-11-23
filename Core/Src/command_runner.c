@@ -3,6 +3,15 @@
 
 #include <string.h>
 
+// this wraps the real command parser (command_parser.c) by adding an error-checking mechanism.
+// since there are no checksums or other error-detection mechanisms in this protocol, we implement
+// a crude one by requiring each command to be sent twice.  The command is only executed when
+// received the second time with identical contents.
+//
+// this should be called frequently by the main loop.
+//
+// when it returns true, a command is available and has been stored in the motionCommand pointer parameter
+
 bool poll_new_command(motionCommand* command) {
 
 	static char command_a[3] = {0};

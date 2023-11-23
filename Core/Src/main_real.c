@@ -4,6 +4,10 @@
 #include "command_runner.h"
 #include "motion.h"
 
+// loop period in microseconds
+// faster loops mean we can output more steps per second which leads to a faster top speed,
+// but also requires more processing power.
+// set this so that last_idle_time never drops too close to zero
 #define DT_US 100
 
 int last_idle_time = 0;
@@ -18,6 +22,7 @@ motionCommand new_command = {0};
 
 void main_real() {
 
+	// default to the motor being on
 	stepper_enable();
 
 	while (1) {
@@ -46,7 +51,6 @@ void main_real() {
 		immediate_position_steps = motion_get_position_target_steps();
 
 		// send one step to the stepper motor if necessary
-		// this can take up to about 10 us
 		int position_error_steps = immediate_position_steps - actual_position_steps;
 		if (position_error_steps > 0) {
 			stepper_step_direction(true);

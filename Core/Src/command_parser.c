@@ -1,5 +1,9 @@
 #include "command_parser.h"
 
+// This parses a string of serial data for commands.  Commands are of the form:
+// xy=-123.4567890
+// They are always followed by a newline or return character.
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,9 +31,7 @@ bool get_command_received() { bool value = last_command_ready; last_command_read
 char* get_command() { return last_command; }
 double get_value() { return last_value_dbl; }
 
-// This parses a string of serial data for commands.  Commands are of the form:
-// xy=-123.4567890
-// They are always followed by a newline or return character.
+// This is the state machine that does the character-by-character parsing
 
 void command_parse_char(char c) {
 

@@ -2,8 +2,11 @@
 #include "uptime.h"
 
 // low-level stepper control
-// general individual forward and backwards steps,
-// or turn the motor power on and off
+//
+// we expect the stepper driver to be wired up as follows:
+// ENABLE - PB4
+// DIRECTION - PB4
+// PULSE - PA15
 
 void stepper_enable() {
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
