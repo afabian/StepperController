@@ -125,6 +125,9 @@ int motion_get_position_target_steps_velocity_mode() {
 		v_tgt = 0;
 		if (v_cmd == 0) {
 			stop_needed = false;
+			t0 = uptime();
+			p0 = p_cmd;
+			v0 = 0;
 		}
 	}
 	else {
